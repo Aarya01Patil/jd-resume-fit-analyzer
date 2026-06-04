@@ -1,0 +1,707 @@
+{
+  "name": "JD-Resume Fit Analyzer",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "efe8fa9e-c103-4dc7-8464-86cd95541751",
+        "formTitle": "JD-Resume Fit Analyzer",
+        "formDescription": "Submit a job description and your resume for an AI-powered fit analysis.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Candidate Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Candidate Email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Job Description",
+              "fieldType": "textarea",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Resume (PDF)",
+              "fieldType": "file",
+              "acceptFileTypes": ".pdf",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "58858ba6-8e97-40b3-8dd6-b6fc37051dbf",
+      "name": "1 · Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2,
+      "position": [
+        -1888,
+        192
+      ],
+      "webhookId": "b0a3d7ab-550a-44cb-a0ac-274cfaa530db"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "Resume__PDF_",
+        "options": {}
+      },
+      "id": "2f00fb56-e73f-495f-a1d2-788131735b45",
+      "name": "2 · PDF Parser",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -1664,
+        192
+      ],
+      "notes": "DETERMINISTIC: Extracts plain text from the uploaded resume PDF using n8n's built-in file extraction. No AI involved."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a professional resume parser. Extract structured information from resume text and return ONLY valid JSON. Do not include any explanation or markdown.\n\nReturn this exact schema:\n{\n  \"name\": \"string\",\n  \"email\": \"string or null\",\n  \"phone\": \"string or null\",\n  \"skills\": [\"list of technical and soft skills\"],\n  \"experience_years\": number,\n  \"job_titles\": [\"previous job titles\"],\n  \"education\": [\"degree and institution\"],\n  \"certifications\": [\"list or empty array\"],\n  \"summary\": \"2-3 sentence professional summary\"\n}",
+              "role": "system"
+            },
+            {
+              "content": "=Parse this resume:\n\n{{ $json.text }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 800,
+          "temperature": 0.1
+        }
+      },
+      "id": "f8733e2a-97aa-46fa-a3b5-a5d0598604a3",
+      "name": "3 · AI Extractor (LLM)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        -1440,
+        192
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "49JSyJa575cW6YkJ",
+          "name": "n8n free OpenAI API credits"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "AI STEP — Role: Extractor. Parses raw resume text into structured JSON fields (skills, experience, education). Low temperature for consistent extraction."
+    },
+    {
+      "parameters": {
+        "jsCode": "// DETERMINISTIC STEP: Get the raw text output from the AI node\nconst rawText = $input.first().json.message.content;\nlet parsedData;\n\ntry {\n  // Clean up any markdown code blocks the AI might have added\n  const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();\n  parsedData = JSON.parse(cleaned);\n} catch(e) {\n  throw new Error('AI extractor returned invalid JSON: ' + rawText);\n}\n\n// Return the parsed data nested securely under the 'resume_data' key\n// This is critical because Node 4 is specifically looking for $json.resume_data\nreturn [{\n  json: {\n    resume_data: parsedData\n  }\n}];"
+      },
+      "id": "f8eaf796-e8e9-42e5-ae62-c34eec95f439",
+      "name": "3b · Parse Extractor JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        192
+      ],
+      "notes": "DETERMINISTIC: Cleans and validates the JSON returned by the AI extractor. Strips markdown code fences, throws on invalid JSON."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an expert recruiter. Compare a job description to a candidate's resume and return ONLY valid JSON.\n\nReturn this exact schema:\n{\n  \"overall_score\": number (0-100),\n  \"skills_match_score\": number (0-100),\n  \"experience_match_score\": number (0-100),\n  \"education_match_score\": number (0-100),\n  \"matched_skills\": [\"skills present in both JD and resume\"],\n  \"missing_skills\": [\"skills required in JD but absent from resume\"],\n  \"strengths\": [\"2-3 candidate strengths relevant to the JD\"],\n  \"gaps\": [\"2-3 key gaps\"],\n  \"recommendation\": \"one sentence recruiter verdict\",\n  \"fit_category\": \"strong_fit | partial_fit | low_fit\"\n}\n\nScoring guide:\n- 70-100: Strong fit — recommend for interview\n- 40-69: Partial fit — recommend with conditions\n- 0-39: Low fit — not suitable at this time",
+              "role": "system"
+            },
+            {
+              "content": "Job Description:\n{{ $('1 · Form Trigger').item.json['Job Description'] }}\n\nCandidate Resume Data:\n{{ JSON.stringify($json.resume_data, null, 2) }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1000,
+          "temperature": 0.2
+        }
+      },
+      "id": "2c4ce58d-e46a-4118-8d47-61fd1e80ac8b",
+      "name": "4 · AI Fit Scorer (LLM)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        -864,
+        192
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "49JSyJa575cW6YkJ",
+          "name": "n8n free OpenAI API credits"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "AI STEP — Role: Scorer + Analyst. Compares JD requirements against extracted resume data. Returns structured fit scores and reasoning."
+    },
+    {
+      "parameters": {
+        "jsCode": "// DETERMINISTIC: Parse and validate AI scorer output\nconst rawText = $input.first().json.message.content;\nlet scoreData;\ntry {\n  const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();\n  scoreData = JSON.parse(cleaned);\n} catch(e) {\n  throw new Error('AI scorer returned invalid JSON: ' + rawText);\n}\n\n// Deterministic validation\nconst score = Number(scoreData.overall_score);\nif (isNaN(score) || score < 0 || score > 100) {\n  throw new Error('Score out of valid range 0-100: ' + scoreData.overall_score);\n}\n\nif (!['strong_fit', 'partial_fit', 'low_fit'].includes(scoreData.fit_category)) {\n  // Assign category deterministically based on score\n  if (score >= 70) scoreData.fit_category = 'strong_fit';\n  else if (score >= 40) scoreData.fit_category = 'partial_fit';\n  else scoreData.fit_category = 'low_fit';\n}\n\nconst resumeData = $('3b · Parse Extractor JSON').first().json.resume_data;\nconst formData = $('1 · Form Trigger').first().json;\n\nreturn [{\n  json: {\n    score_data: scoreData,\n    overall_score: score,\n    fit_category: scoreData.fit_category,\n    candidate_name: formData['Candidate Name'],\n    candidate_email: formData['Candidate Email'],\n    job_description: formData['Job Description'],\n    resume_data: resumeData\n  }\n}];"
+      },
+      "id": "bc4299d3-7a2f-4aad-86dd-143820c16914",
+      "name": "5 · Score Validator (Deterministic)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        176
+      ],
+      "notes": "DETERMINISTIC: Validates score is numeric 0-100. Enforces fit_category against thresholds (70+, 40-69, <40). This is deterministic rule enforcement — not AI."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.fit_category }}",
+                    "rightValue": "strong_fit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "strong_fit"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.fit_category }}",
+                    "rightValue": "partial_fit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "partial_fit"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.fit_category }}",
+                    "rightValue": "low_fit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "low_fit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6ac618db-6067-4cd5-88a8-127136928f8e",
+      "name": "6 · Router (by Score Category)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -192,
+        160
+      ],
+      "notes": "DETERMINISTIC: Routes execution based on fit_category string set by Score Validator. Three outputs: strong_fit → human approval, partial_fit → AI recommender, low_fit → auto reject."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.candidate_email }}",
+        "subject": "Your application — we'd like to review it further",
+        "message": "=<h2>Application Received ✓</h2>\n<p>Dear {{ $json.candidate_name }},</p>\n<p>Your application scored <strong>{{ $json.overall_score }}/100</strong> — a strong fit for this role.</p>\n<p><strong>Your top matched skills:</strong> {{ $json.score_data.matched_skills.join(', ') }}</p>\n<p><strong>Recruiter note:</strong> {{ $json.score_data.recommendation }}</p>\n<p>A recruiter will follow up within 2 business days.</p>",
+        "options": {}
+      },
+      "id": "c76b62d3-a290-45f5-a825-86d09b11627b",
+      "name": "6a · Notify Candidate (Strong Fit)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        256,
+        -64
+      ],
+      "webhookId": "34162d05-0d3a-40fe-96d4-f6040b55b34a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qM0cGLAdCrGb2XYu",
+          "name": "Gmail OAuth2 API"
+        }
+      },
+      "notes": "HUMAN-IN-LOOP: Sends notification email to candidate. Simultaneously sends an internal alert to recruiter for manual review and approval before proceeding."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a career coach. Given a job description and a candidate's gap analysis, write 3-5 specific, actionable improvement recommendations. Be concrete — mention specific tools, certifications, or projects. Return ONLY valid JSON:\n{\n  \"recommendations\": [\n    {\"area\": \"skill/area name\", \"action\": \"specific action to take\", \"resources\": \"suggested resources or platforms\"}\n  ],\n  \"encouragement\": \"one motivating sentence\"\n}",
+              "role": "system"
+            },
+            {
+              "content": "Job description:\n{{ $json.job_description }}\n\nMissing skills: {{ $json.score_data.missing_skills.join(', ') }}\nGaps: {{ $json.score_data.gaps.join(', ') }}\nOverall score: {{ $json.overall_score }}/100"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 600,
+          "temperature": 0.4
+        }
+      },
+      "id": "a890666d-b6ce-498e-9823-dca352631820",
+      "name": "6b · AI Recommender (Partial Fit)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        160,
+        160
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "49JSyJa575cW6YkJ",
+          "name": "n8n free OpenAI API credits"
+        }
+      },
+      "notes": "AI STEP — Role: Career Coach / Recommender. Only triggers for partial fit. Generates personalized improvement suggestions for the candidate."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('5 · Score Validator (Deterministic)').item.json.candidate_email }}",
+        "subject": "Your application — feedback and next steps",
+        "message": "=<h2>Application Feedback</h2> <p>Dear {{ $('5 · Score Validator (Deterministic)').item.json.candidate_name }},</p> <p>Your application scored <strong>{{ $('5 · Score Validator (Deterministic)').item.json.overall_score }}/100</strong>. You show real potential, with some areas to develop before you'd be a strong match.</p> <p><strong>Your strengths:</strong> {{ $('5 · Score Validator (Deterministic)').item.json.score_data.strengths.join(', ') }}</p>  <p><strong>Personalized improvement plan:</strong></p> <ul>   {{ JSON.parse($json.message.content).recommendations.map(r => `<li><b>${r.area}</b>: ${r.action} — <em>${r.resources}</em></li>`).join('') }} </ul>",
+        "options": {}
+      },
+      "id": "bd10acf5-db13-40f2-ac62-8acaccc5e6fe",
+      "name": "7b · Email Partial Fit Report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        528,
+        160
+      ],
+      "webhookId": "3a6a3d8d-8e55-49e0-b1fd-4dd5e1aed740",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qM0cGLAdCrGb2XYu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.candidate_email }}",
+        "subject": "Your application — update",
+        "message": "=<p>Dear {{ $json.candidate_name }},</p> <p>Thank you for applying. After reviewing your application (score: {{ $json.overall_score }}/100), we don't feel it's the right match for this role at this time.</p> <p>We encourage you to apply for other positions that may be a better fit.</p> <p>Best regards,<br>The Recruitment Team</p>",
+        "options": {}
+      },
+      "id": "c9ae3d8d-f8c9-4b51-8ecb-75d7543b81fd",
+      "name": "6c · Auto-Reject Email (Low Fit)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        528,
+        384
+      ],
+      "webhookId": "a4443deb-7149-44ae-8e25-367905134948",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qM0cGLAdCrGb2XYu",
+          "name": "Gmail OAuth2 API"
+        }
+      },
+      "notes": "DETERMINISTIC: Triggered automatically for scores <40. No human review needed. Sends a polite rejection email."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1bQJLdIBhA4_0FzcaG4zokVxpRnV0JtgtkLhDyHOAtJA",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "2085018295",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now }}",
+            "Candidate Name": "={{ $('5 · Score Validator (Deterministic)').item.json.candidate_name }}",
+            "Candidate Email": "={{ $('5 · Score Validator (Deterministic)').item.json.candidate_email }}",
+            "Fit Category": "={{ $('5 · Score Validator (Deterministic)').item.json.fit_category }}",
+            "Overall Score": "={{ $('5 · Score Validator (Deterministic)').item.json.overall_score }}",
+            "Matched Skills": "={{ $('5 · Score Validator (Deterministic)').item.json.score_data.matched_skills.join(', ') }}",
+            "Missing Skills": "={{ $('5 · Score Validator (Deterministic)').item.json.score_data.missing_skills.join(', ') }}",
+            "Recommendation": "={{ $('5 · Score Validator (Deterministic)').item.json.score_data.recommendation }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Candidate Name",
+              "displayName": "Candidate Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Candidate Email",
+              "displayName": "Candidate Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Overall Score",
+              "displayName": "Overall Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Fit Category",
+              "displayName": "Fit Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Matched Skills",
+              "displayName": "Matched Skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Missing Skills",
+              "displayName": "Missing Skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Recommendation",
+              "displayName": "Recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "threadId",
+              "displayName": "threadId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "labelIds",
+              "displayName": "labelIds",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c801c277-d966-4b24-a35a-4df3127b3274",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1072,
+        192
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Wbc7JlbmCHm0nz0o",
+          "name": "Google Sheets OAuth2 API"
+        }
+      },
+      "notes": "DETERMINISTIC: Appends every result to a Google Sheet for recruiter dashboard and audit trail."
+    },
+    {
+      "parameters": {
+        "sendTo": "daredevil3624@gmail.com",
+        "subject": "New Strong Fit Candidate — Review Required",
+        "message": "=<p><strong>{{ $('5 · Score Validator (Deterministic)').item.json.candidate_name }}</strong> scored <strong>{{ $('5 · Score Validator (Deterministic)').item.json.overall_score }}/100</strong>.</p>\n<p><strong>Fit Category:</strong> {{ $('5 · Score Validator (Deterministic)').item.json.fit_category }}</p>\n<p><strong>Matched Skills:</strong> {{ $('5 · Score Validator (Deterministic)').item.json.score_data.matched_skills.join(', ') }}</p>\n<p><strong>Missing Skills:</strong> {{ $('5 · Score Validator (Deterministic)').item.json.score_data.missing_skills.join(', ') }}</p>\n<p><strong>Recommendation:</strong> {{ $('5 · Score Validator (Deterministic)').item.json.score_data.recommendation }}</p>\n<p>Please review and decide on next steps.</p>",
+        "options": {}
+      },
+      "id": "19bed63c-d152-4196-9904-fcd2bff8dc7b",
+      "name": "6a2 · Alert Recruiter (Strong Fit)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -64
+      ],
+      "webhookId": "cf2de587-86ee-4e7b-afba-07f9e6e166f5",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qM0cGLAdCrGb2XYu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1 · Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "2 · PDF Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2 · PDF Parser": {
+      "main": [
+        [
+          {
+            "node": "3 · AI Extractor (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3 · AI Extractor (LLM)": {
+      "main": [
+        [
+          {
+            "node": "3b · Parse Extractor JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3b · Parse Extractor JSON": {
+      "main": [
+        [
+          {
+            "node": "4 · AI Fit Scorer (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4 · AI Fit Scorer (LLM)": {
+      "main": [
+        [
+          {
+            "node": "5 · Score Validator (Deterministic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5 · Score Validator (Deterministic)": {
+      "main": [
+        [
+          {
+            "node": "6 · Router (by Score Category)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6 · Router (by Score Category)": {
+      "main": [
+        [
+          {
+            "node": "6a · Notify Candidate (Strong Fit)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "6b · AI Recommender (Partial Fit)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "6c · Auto-Reject Email (Low Fit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6b · AI Recommender (Partial Fit)": {
+      "main": [
+        [
+          {
+            "node": "7b · Email Partial Fit Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7b · Email Partial Fit Report": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6a · Notify Candidate (Strong Fit)": {
+      "main": [
+        [
+          {
+            "node": "6a2 · Alert Recruiter (Strong Fit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6c · Auto-Reject Email (Low Fit)": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6a2 · Alert Recruiter (Strong Fit)": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e9d536a6-8ae9-483d-803c-eceeaab6338c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "620003916b348aa9391e3d979b9a5ee858ce3251e46630fffd896409f1b983e0"
+  },
+  "nodeGroups": [],
+  "id": "bglmcYnfb3rBV7Cg",
+  "tags": []
+}
